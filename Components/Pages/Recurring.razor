@@ -1,0 +1,381 @@
+@page "/duzenli"
+@rendermode InteractiveServer
+@inject CategoryService CategorySvc
+@inject RecurringService RecurringSvc
+@inject AccountService AccountSvc
+@inject SettingsService Settings
+
+<PageTitle>Düzenli işlemler</PageTitle>
+
+<div class="spread">
+    <div>
+        <h1>Düzenli işlemler</h1>
+        <p class="subtitle">
+            Kira, abonelik, maaş gibi her ay tekrar eden kalemler. Zamanı gelince
+            gerçek bir işlem olarak yazılırlar; burada duran şey sadece kuraldır.
+        </p>
+    </div>
+    <div class="row">
+        <button @onclick="GenerateAsync">Şimdi işle</button>
+        <button class="primary" @onclick="NewRule">+ Yeni kural</button>
+    </div>
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert ok">@_message</div>
+}
+@if (_error is not null && _editing is null)
+{
+    <div class="alert err">@_error</div>
+}
+
+@if (_editing is not null)
+{
+    <div class="card" style="margin-bottom:1.25rem">
+        <div class="spread" style="margin-bottom:.9rem">
+            <h3 style="margin:0">@(_editing.Id == 0 ? "Yeni kural" : "Kuralı düzenle")</h3>
+            <div class="kind-toggle" style="max-width:230px">
+                <button type="button" class="@KindClass(EntryKind.Expense)" @onclick="() => SetKind(EntryKind.Expense)">Gider</button>
+                <button type="button" class="@KindClass(EntryKind.Income)" @onclick="() => SetKind(EntryKind.Income)">Gelir</button>
+            </div>
+        </div>
+
+        <div class="entry-form">
+            <label class="field">
+                <span>Ad</span>
+                <input @bind="_editing.Name" placeholder="Örn. Ev kirası" />
+            </label>
+
+            <label class="field">
+                <span>Tutar (@_settings.Currency)</span>
+                <input @bind="_amount" inputmode="decimal" placeholder="0,00" />
+            </label>
+
+            <label class="field">
+                <span>Kategori</span>
+                <select value="@_editing.CategoryId" @onchange="OnCategoryChanged">
+                    <option value="0">— seçin —</option>
+                    @foreach (var c in _categories.Where(c => c.Kind == _editing.Kind))
+                    {
+                        <option value="@c.Id">@(string.IsNullOrEmpty(c.Icon) ? "" : c.Icon + " ")@c.Name</option>
+                    }
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Ayın günü</span>
+                <input type="number" min="1" max="31" @bind="_editing.DayOfMonth" />
+            </label>
+
+            <label class="field">
+                <span>Ödeme</span>
+                <select value="@((int)_editing.Method)" @onchange="OnMethodChanged">
+                    <option value="0">Nakit</option>
+                    <option value="1">Kart</option>
+                    <option value="2">Havale</option>
+                    <option value="3">Diğer</option>
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Hesap</span>
+                <select value="@(_editing.AccountId?.ToString() ?? "")" @onchange="OnAccountChanged">
+                    <option value="">— yok —</option>
+                    @foreach (var a in _accounts)
+                    {
+                        <option value="@a.Id">@(string.IsNullOrEmpty(a.Icon) ? "" : a.Icon + " ")@a.Name</option>
+                    }
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Nereye / kaynak</span>
+                <input @bind="_editing.Payee" placeholder="İsteğe bağlı" />
+            </label>
+
+            <label class="field">
+                <span>Başlangıç</span>
+                <input type="date" @bind="_editing.StartDate" />
+            </label>
+
+            <label class="field">
+                <span>Bitiş (boş: süresiz)</span>
+                <input type="date" @bind="_endDate" />
+            </label>
+        </div>
+
+        <p class="small muted" style="margin:.75rem 0 0">
+            31 girerseniz her ayın son gününe düşer (28/29/30/31, aya göre); kısa bir aya
+            sığmayan başka günler de o ayın son gününe çekilir.
+            Başlangıç tarihi geçmişteyse kaydettiğiniz anda aradaki tüm aylar işlenir.
+            Hesap seçerseniz oluşan işlemler o hesabın bakiyesine işler; kredi kartı
+            seçtiklerinizse Panel'deki borç tahminine de girer.
+        </p>
+
+        @if (_error is not null)
+        {
+            <div class="alert err" style="margin:.9rem 0 0">@_error</div>
+        }
+
+        <div class="row" style="margin-top:1rem">
+            <button class="primary" @onclick="SaveAsync">Kaydet</button>
+            <button @onclick="CancelEdit">Vazgeç</button>
+            @if (_editing.Id != 0)
+            {
+                <button class="danger ghost" @onclick="() => _confirmDelete = _editing.Id">Sil</button>
+            }
+        </div>
+    </div>
+}
+
+@if (_confirmDelete is { } deleteId)
+{
+    <div class="alert err">
+        <div class="spread">
+            <span>Kural silinecek. Daha önce oluşturduğu işlemler listede kalır.</span>
+            <span class="row">
+                <button class="danger" @onclick="() => DeleteAsync(deleteId)">Sil</button>
+                <button @onclick="() => _confirmDelete = null">Vazgeç</button>
+            </span>
+        </div>
+    </div>
+}
+
+@if (_rules.Count == 0)
+{
+    <div class="empty">
+        Henüz düzenli işlem yok. Kira veya bir abonelik eklemek iyi bir başlangıç.
+    </div>
+}
+else
+{
+    <div class="card scroll-x">
+        <table>
+            <thead>
+            <tr>
+                <th>Ad</th>
+                <th>Kategori</th>
+                <th>Hesap</th>
+                <th>Gün</th>
+                <th>Sonraki</th>
+                <th class="right">Tutar</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var r in _rules)
+            {
+                var next = RecurringService.NextOccurrence(r, _today);
+                <tr style="@(r.Paused ? "opacity:.55" : "")">
+                    <td>
+                        @r.Name
+                        @if (RecurringService.IsOneTime(r))
+                        {
+                            <span class="pill">tek seferlik</span>
+                        }
+                        @if (r.Paused)
+                        {
+                            <span class="pill">durduruldu</span>
+                        }
+                    </td>
+                    <td>
+                        <span class="pill">
+                            <span class="dot" style="@($"background:{r.Category?.Color ?? "#8b93a3"}")"></span>
+                            @r.Category?.Name
+                        </span>
+                    </td>
+                    <td class="small">
+                        @if (r.Account is { } acc)
+                        {
+                            <span class="muted">@(string.IsNullOrEmpty(acc.Icon) ? "" : acc.Icon + " ")@acc.Name</span>
+                        }
+                        else
+                        {
+                            <span class="pill" title="Hesap seçilmediği için bakiyelere ve borç tahminine girmiyor">yok</span>
+                        }
+                    </td>
+                    <td class="muted">@(r.DayOfMonth == 31 ? "ayın son günü" : $"her ayın {r.DayOfMonth}.")</td>
+                    <td class="muted small nowrap">
+                        @(next is { } d ? d.ToString("d MMMM yyyy", Money.Culture) : "—")
+                    </td>
+                    <td class="right">
+                        <span class="amount @(r.Kind == EntryKind.Income ? "income" : "expense")">
+                            @_settings.Format(r.AmountMinor)
+                        </span>
+                    </td>
+                    <td class="right nowrap">
+                        <button class="ghost small" @onclick="() => TogglePauseAsync(r)">
+                            @(r.Paused ? "Sürdür" : "Durdur")
+                        </button>
+                        <button class="ghost small" @onclick="() => Edit(r)">Düzenle</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+
+    private UserSettings _settings = new("₺", 1);
+    private List<RecurringRule> _rules = [];
+    private List<Category> _categories = [];
+    private List<Account> _accounts = [];
+
+    private RecurringRule? _editing;
+    private string _amount = "";
+    private DateOnly? _endDate;
+    private int? _confirmDelete;
+    private string? _error;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settings = await Settings.GetAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _rules = await RecurringSvc.ListAsync();
+        _categories = await CategorySvc.ListAsync();
+        _accounts = await AccountSvc.ListAsync();
+    }
+
+    private void NewRule()
+    {
+        _error = null;
+        _message = null;
+        _confirmDelete = null;
+        _amount = "";
+        _endDate = null;
+        _editing = new RecurringRule
+        {
+            Kind = EntryKind.Expense,
+            DayOfMonth = _today.Day,
+            StartDate = _today
+        };
+    }
+
+    private void Edit(RecurringRule r)
+    {
+        _error = null;
+        _message = null;
+        _confirmDelete = null;
+        _amount = Money.ToInput(r.AmountMinor);
+        _endDate = r.EndDate;
+        // Copy so cancelling does not leave edits on the list row.
+        _editing = new RecurringRule
+        {
+            Id = r.Id,
+            Name = r.Name,
+            CategoryId = r.CategoryId,
+            Kind = r.Kind,
+            AmountMinor = r.AmountMinor,
+            DayOfMonth = r.DayOfMonth,
+            Payee = r.Payee,
+            Method = r.Method,
+            AccountId = r.AccountId,
+            StartDate = r.StartDate,
+            EndDate = r.EndDate,
+            Paused = r.Paused
+        };
+    }
+
+    private void CancelEdit()
+    {
+        _editing = null;
+        _error = null;
+        _confirmDelete = null;
+    }
+
+    private string KindClass(EntryKind kind) =>
+        _editing?.Kind == kind ? $"on {(kind == EntryKind.Expense ? "expense" : "income")}" : "";
+
+    private void SetKind(EntryKind kind)
+    {
+        if (_editing is null || _editing.Kind == kind) return;
+        _editing.Kind = kind;
+        _editing.CategoryId = 0;
+    }
+
+    private void OnCategoryChanged(ChangeEventArgs e)
+    {
+        if (_editing is null) return;
+        _editing.CategoryId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+    }
+
+    private void OnMethodChanged(ChangeEventArgs e)
+    {
+        if (_editing is null) return;
+        _editing.Method = (PaymentMethod)int.Parse(e.Value?.ToString() ?? "0");
+    }
+
+    private void OnAccountChanged(ChangeEventArgs e)
+    {
+        if (_editing is null) return;
+        _editing.AccountId = int.TryParse(e.Value?.ToString(), out var id) ? id : null;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is null) return;
+
+        _error = Validate();
+        if (_error is not null) return;
+
+        Money.TryParse(_amount, out var minor);
+        _editing.AmountMinor = minor;
+        _editing.EndDate = _endDate;
+
+        await RecurringSvc.SaveAsync(_editing);
+
+        // Booking straight away is what the user expects after saving a rule that
+        // is already due; waiting up to six hours for the scheduler would look broken.
+        var written = await RecurringSvc.GenerateDueAsync(_today);
+
+        _message = written > 0
+            ? $"Kural kaydedildi, {written} işlem oluşturuldu."
+            : "Kural kaydedildi.";
+        CancelEdit();
+        await LoadAsync();
+    }
+
+    private string? Validate()
+    {
+        if (_editing is null) return null;
+        if (string.IsNullOrWhiteSpace(_editing.Name)) return "Ad boş olamaz.";
+        if (_editing.CategoryId == 0) return "Kategori seçilmeli.";
+        if (!Money.TryParse(_amount, out var minor)) return "Tutar sayı olmalı.";
+        if (minor <= 0) return "Tutar sıfırdan büyük olmalı.";
+        if (_editing.DayOfMonth is < 1 or > 31) return "Ayın günü 1 ile 31 arasında olmalı.";
+        if (_endDate is { } end && end < _editing.StartDate) return "Bitiş, başlangıçtan önce olamaz.";
+        return null;
+    }
+
+    private async Task TogglePauseAsync(RecurringRule r)
+    {
+        await RecurringSvc.SetPausedAsync(r.Id, !r.Paused);
+        _message = r.Paused ? $"\"{r.Name}\" sürdürüldü." : $"\"{r.Name}\" durduruldu.";
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        await RecurringSvc.DeleteAsync(id);
+        _message = "Kural silindi.";
+        _confirmDelete = null;
+        CancelEdit();
+        await LoadAsync();
+    }
+
+    private async Task GenerateAsync()
+    {
+        var written = await RecurringSvc.GenerateDueAsync(_today);
+        _message = written > 0 ? $"{written} işlem oluşturuldu." : "Vadesi gelen işlem yok.";
+        await LoadAsync();
+    }
+}

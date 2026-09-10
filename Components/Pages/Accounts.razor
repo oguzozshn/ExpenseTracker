@@ -1,0 +1,306 @@
+@page "/hesaplar"
+@rendermode InteractiveServer
+@inject SettingsService Settings
+@inject AccountService AccountSvc
+
+<PageTitle>Hesaplar</PageTitle>
+
+<div class="spread">
+    <div>
+        <h1>Hesaplar</h1>
+        <p class="subtitle">
+            Paranın durduğu yerler. Ekstre içe aktarırken işlemler bir hesaba düşer,
+            bakiye de o hesabın açılış bakiyesi artı bütün hareketlerdir.
+        </p>
+    </div>
+    <button class="primary" @onclick="NewAccount">+ Yeni hesap</button>
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert ok">@_message</div>
+}
+@if (_error is not null && _editing is null)
+{
+    <div class="alert err">@_error</div>
+}
+
+@if (_editing is not null)
+{
+    <div class="card" style="margin-bottom:1.25rem">
+        <h3>@(_editing.Id == 0 ? "Yeni hesap" : "Hesabı düzenle")</h3>
+
+        <div class="entry-form">
+            <label class="field">
+                <span>Ad</span>
+                <input @bind="_editing.Name" placeholder="Örn. Garanti vadesiz" />
+            </label>
+
+            <label class="field">
+                <span>Tür</span>
+                <select value="@((int)_editing.Type)" @onchange="OnTypeChanged">
+                    <option value="0">Nakit</option>
+                    <option value="1">Banka</option>
+                    <option value="2">Kredi kartı</option>
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Açılış bakiyesi (@_settings.Currency)</span>
+                <input @bind="_openingBalance" inputmode="decimal" placeholder="0,00" />
+            </label>
+
+            <label class="field">
+                <span>Son 4 hane</span>
+                <input @bind="_editing.Reference" maxlength="8" placeholder="1234" />
+            </label>
+
+            <label class="field">
+                <span>Simge</span>
+                <input @bind="_editing.Icon" maxlength="4" placeholder="🏦" />
+            </label>
+
+            <label class="field">
+                <span>Renk</span>
+                <input type="color" @bind="_editing.Color" />
+            </label>
+        </div>
+
+        <p class="small muted" style="margin:.75rem 0 0">
+            @if (_editing.Type == AccountType.CreditCard)
+            {
+                <text>
+                    Kredi kartında bakiye borcu gösterir: harcamalar bakiyeyi eksiye çeker,
+                    kart ödemesi sıfıra yaklaştırır. Mevcut borcunuz varsa açılış bakiyesini
+                    eksi olarak girin.
+                </text>
+            }
+            else
+            {
+                <text>
+                    Açılış bakiyesi, ilk işlemden önceki tutardır. Boş bırakırsanız bakiye
+                    sadece buraya girdiğiniz hareketleri yansıtır.
+                </text>
+            }
+        </p>
+
+        @if (_error is not null)
+        {
+            <div class="alert err" style="margin:.9rem 0 0">@_error</div>
+        }
+
+        <div class="row" style="margin-top:1rem">
+            <button class="primary" @onclick="SaveAsync">Kaydet</button>
+            <button @onclick="() => { _editing = null; _error = null; }">Vazgeç</button>
+        </div>
+    </div>
+}
+
+@if (_balances.Count == 0)
+{
+    <div class="empty">Henüz hesap yok.</div>
+}
+else
+{
+    <div class="tiles" style="margin-bottom:1.25rem">
+        <div class="tile net">
+            <div class="k">Toplam varlık</div>
+            <div class="v">@_settings.Format(_balances.Where(b => b.Balance > 0).Sum(b => b.Balance))</div>
+            <div class="sub">artıda olan hesaplar</div>
+        </div>
+        <div class="tile expense">
+            <div class="k">Toplam borç</div>
+            <div class="v">@_settings.Format(_balances.Where(b => b.Balance < 0).Sum(b => -b.Balance))</div>
+            <div class="sub">kart ve eksideki hesaplar</div>
+        </div>
+        <div class="tile @(_net < 0 ? "expense" : "income")">
+            <div class="k">Net</div>
+            <div class="v">@_settings.FormatSigned(_net)</div>
+            <div class="sub">@_balances.Count hesap</div>
+        </div>
+    </div>
+
+    <div class="card scroll-x">
+        <table>
+            <thead>
+            <tr>
+                <th style="width:1%"></th>
+                <th>Hesap</th>
+                <th>Tür</th>
+                <th>Hareket</th>
+                <th>Son işlem</th>
+                <th class="right">Bakiye</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var b in _balances)
+            {
+                <tr style="@(b.Account.Archived ? "opacity:.55" : "")">
+                    <td>
+                        <span style="@($"background:{b.Account.Color};width:12px;height:12px;border-radius:50%;display:inline-block")"></span>
+                    </td>
+                    <td>
+                        @(string.IsNullOrEmpty(b.Account.Icon) ? "" : b.Account.Icon + " ")@b.Account.Name
+                        @if (!string.IsNullOrEmpty(b.Account.Reference))
+                        {
+                            <span class="muted small"> ····@b.Account.Reference</span>
+                        }
+                        @if (b.Account.Archived)
+                        {
+                            <span class="pill">arşiv</span>
+                        }
+                    </td>
+                    <td class="small muted">@AccountService.TypeLabel(b.Account.Type)</td>
+                    <td class="small muted">@b.Count işlem</td>
+                    <td class="small muted nowrap">
+                        @(b.LastMovement is { } d ? d.ToString("dd.MM.yyyy") : "—")
+                    </td>
+                    <td class="right">
+                        <span class="amount @(b.Balance < 0 ? "expense" : "income")">
+                            @_settings.Format(b.Balance)
+                        </span>
+                        @if (b.CardDebt > 0)
+                        {
+                            <div class="small muted">borç</div>
+                        }
+                    </td>
+                    <td class="right nowrap">
+                        <button class="ghost icon" title="Yukarı" @onclick="() => MoveAsync(b.Account.Id, -1)">↑</button>
+                        <button class="ghost icon" title="Aşağı" @onclick="() => MoveAsync(b.Account.Id, 1)">↓</button>
+                        <button class="ghost small" @onclick="() => Edit(b.Account)">Düzenle</button>
+                        <button class="ghost small" @onclick="() => ToggleArchiveAsync(b.Account)">
+                            @(b.Account.Archived ? "Geri al" : "Arşivle")
+                        </button>
+                        @if (b.Count == 0)
+                        {
+                            <button class="ghost small danger" @onclick="() => DeleteAsync(b.Account.Id)">Sil</button>
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+
+    <p class="small muted" style="margin-top:.75rem">
+        Ekstre yüklemek için <a href="/ice-aktar">İçe aktar</a> sayfasına gidin.
+    </p>
+}
+
+@code {
+    private UserSettings _settings = new("₺", 1);
+    private List<AccountBalance> _balances = [];
+
+    private Account? _editing;
+    private string _openingBalance = "";
+    private string? _error;
+    private string? _message;
+
+    private long _net => _balances.Sum(b => b.Balance);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settings = await Settings.GetAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _balances = await AccountSvc.BalancesAsync(includeArchived: true);
+
+    private void NewAccount()
+    {
+        _error = null;
+        _message = null;
+        _openingBalance = "";
+        _editing = new Account { Type = AccountType.Bank, Color = "#5b8def", Icon = "🏦" };
+    }
+
+    private void Edit(Account a)
+    {
+        _error = null;
+        _message = null;
+        _openingBalance = a.OpeningBalanceMinor == 0 ? "" : Money.ToInput(a.OpeningBalanceMinor);
+        // Copy so cancelling does not leave edits on the list row.
+        _editing = new Account
+        {
+            Id = a.Id,
+            Name = a.Name,
+            Type = a.Type,
+            Color = a.Color,
+            Icon = a.Icon,
+            OpeningBalanceMinor = a.OpeningBalanceMinor,
+            Reference = a.Reference,
+            Archived = a.Archived,
+            SortOrder = a.SortOrder
+        };
+    }
+
+    private void OnTypeChanged(ChangeEventArgs e)
+    {
+        if (_editing is null) return;
+        _editing.Type = (AccountType)int.Parse(e.Value?.ToString() ?? "0");
+        _editing.Icon = _editing.Type switch
+        {
+            AccountType.Cash => "💵",
+            AccountType.Bank => "🏦",
+            _ => "💳"
+        };
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is null) return;
+
+        if (string.IsNullOrWhiteSpace(_editing.Name))
+        {
+            _error = "Ad boş olamaz.";
+            return;
+        }
+
+        long opening = 0;
+        if (!string.IsNullOrWhiteSpace(_openingBalance) && !Money.TryParse(_openingBalance, out opening))
+        {
+            _error = "Açılış bakiyesi sayı olmalı.";
+            return;
+        }
+        _editing.OpeningBalanceMinor = opening;
+
+        var saved = await AccountSvc.SaveAsync(_editing);
+        if (saved is null)
+        {
+            _error = "Bu adla bir hesap zaten var.";
+            return;
+        }
+
+        _message = $"\"{saved.Name}\" kaydedildi.";
+        _editing = null;
+        _error = null;
+        await LoadAsync();
+    }
+
+    private async Task ToggleArchiveAsync(Account a)
+    {
+        await AccountSvc.SetArchivedAsync(a.Id, !a.Archived);
+        _message = a.Archived ? $"\"{a.Name}\" geri alındı." : $"\"{a.Name}\" arşivlendi.";
+        await LoadAsync();
+    }
+
+    private async Task MoveAsync(int id, int direction)
+    {
+        await AccountSvc.MoveAsync(id, direction);
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        if (!await AccountSvc.DeleteAsync(id))
+        {
+            _message = null;
+            _error = "Hesap kullanımda olduğu için silinemedi; arşivleyebilirsiniz.";
+            return;
+        }
+        _message = "Hesap silindi.";
+        _error = null;
+        await LoadAsync();
+    }
+}

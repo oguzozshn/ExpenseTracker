@@ -1,0 +1,295 @@
+@page "/butceler"
+@rendermode InteractiveServer
+@inject SettingsService Settings
+@inject CategoryService CategorySvc
+@inject BudgetService BudgetSvc
+
+<PageTitle>Bütçeler</PageTitle>
+
+<div class="spread">
+    <div>
+        <h1>Bütçeler</h1>
+        <p class="subtitle">
+            Bir gider kategorisine dönemlik sınır koyun. Sınırı boş bırakmak bütçeyi kaldırır.
+        </p>
+    </div>
+    <PeriodNav Value="_period" ValueChanged="OnPeriodChangedAsync" StartDay="_settings.PeriodStartDay" />
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert ok">@_message</div>
+}
+@if (_error is not null)
+{
+    <div class="alert err">@_error</div>
+}
+
+@if (_coverage is { } cov && cov.TotalAverage > 0)
+{
+    <div class="card" style="margin-bottom:1.25rem">
+        <div class="spread" style="margin-bottom:.5rem">
+            <h3 style="margin:0">Bütçe kapsamı</h3>
+            <span class="small muted">son @cov.Periods tam dönemin ortalaması</span>
+        </div>
+
+        <div class="spread">
+            <span class="amount" style="font-size:1.4rem">%@CoveragePercent(cov)</span>
+            <span class="small muted">
+                aylık @_settings.Format(cov.TotalAverage) giderin
+                @_settings.Format(cov.BudgetedAverage) kadarı bütçeli
+            </span>
+        </div>
+
+        <div class="bar" style="margin-top:.4rem">
+            <span class="@CoverageState(cov)" style="@($"width:{CoveragePercent(cov)}%")"></span>
+        </div>
+
+        @foreach (var d in cov.DormantBudgets)
+        {
+            <p class="small" style="margin:.6rem 0 0;color:var(--warn)">
+                <strong>@d.Category.Name</strong> bütçesi @_settings.Format(d.Limit ?? 0) sınırla duruyor
+                ama son @cov.Periods dönemde bu kategoride hiç harcama yok — toplamı şişiriyor,
+                takip ettiği bir şey yok.
+            </p>
+        }
+
+        @if (cov.Uncovered.Any())
+        {
+            <p class="small muted" style="margin:.7rem 0 .4rem">
+                Bütçesiz kategoriler — aylık @_settings.Format(cov.UncoveredAverage) buradan çıkıyor:
+            </p>
+            <table>
+                <tbody>
+                @foreach (var u in cov.Uncovered.Take(5))
+                {
+                    <tr>
+                        <td>
+                            <span class="bd-name">
+                                <span class="dot" style="@($"background:{u.Category.Color}")"></span>
+                                @(string.IsNullOrEmpty(u.Category.Icon) ? "" : u.Category.Icon + " ")@u.Category.Name
+                            </span>
+                        </td>
+                        <td class="right nowrap">
+                            <span class="amount">@_settings.Format(u.MonthlyAverage)</span>
+                            <span class="muted small"> / ay</span>
+                        </td>
+                        <td class="right" style="width:1%">
+                            <button class="ghost small" @onclick="() => Suggest(u)">Limit koy</button>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        }
+    </div>
+}
+
+@if (_statuses.Count > 0)
+{
+    var limit = _statuses.Sum(s => s.Limit);
+    var spent = _statuses.Sum(s => s.Spent);
+
+    <div class="tiles" style="margin-bottom:1.25rem">
+        <div class="tile net">
+            <div class="k">Toplam bütçe</div>
+            <div class="v">@_settings.Format(limit)</div>
+            <div class="sub">@_statuses.Count kategori</div>
+        </div>
+        <div class="tile expense">
+            <div class="k">Harcanan</div>
+            <div class="v">@_settings.Format(spent)</div>
+            <div class="sub">%@(limit > 0 ? (int)Math.Round(spent * 100d / limit) : 0)</div>
+        </div>
+        <div class="tile @(limit - spent < 0 ? "expense" : "income")">
+            <div class="k">Kalan</div>
+            <div class="v">@_settings.Format(limit - spent)</div>
+            <div class="sub">@_period.DayCount günün @_period.ElapsedDays(_today). günü</div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.25rem">
+        @foreach (var s in _statuses)
+        {
+            var projected = s.Projected(_period, _today);
+            <div class="budget-row">
+                <div class="spread">
+                    <span class="bd-name">
+                        <span class="dot" style="@($"background:{s.Category.Color}")"></span>
+                        <strong>@(string.IsNullOrEmpty(s.Category.Icon) ? "" : s.Category.Icon + " ")@s.Category.Name</strong>
+                    </span>
+                    <span class="nowrap">
+                        <span class="amount">@_settings.Format(s.Spent)</span>
+                        <span class="muted small"> / @_settings.Format(s.Limit)</span>
+                    </span>
+                </div>
+
+                <div class="bar" style="margin-top:.4rem">
+                    <span class="@BarState(s)" style="@($"width:{(int)Math.Round(s.Fill * 100)}%")"></span>
+                </div>
+
+                <div class="spread small muted" style="margin-top:.3rem">
+                    <span>
+                        @if (s.Over)
+                        {
+                            <span style="color:var(--bad)">@_settings.Format(-s.Remaining) aşıldı</span>
+                        }
+                        else
+                        {
+                            <text>@_settings.Format(s.Remaining) kaldı</text>
+                        }
+                    </span>
+                    @if (_period.Contains(_today) && projected > 0)
+                    {
+                        <span style="@(projected > s.Limit ? "color:var(--warn)" : "")">
+                            Bu hızla dönem sonu: @_settings.Format(projected)
+                        </span>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<h2>Sınırları düzenle</h2>
+
+<div class="card scroll-x">
+    <table>
+        <thead>
+        <tr>
+            <th>Kategori</th>
+            <th class="right">Aylık ortalama</th>
+            <th style="width:200px">Dönemlik sınır (@_settings.Currency)</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var c in _expenseCategories)
+        {
+            <tr>
+                <td>
+                    <span class="bd-name">
+                        <span class="dot" style="@($"background:{c.Color}")"></span>
+                        @(string.IsNullOrEmpty(c.Icon) ? "" : c.Icon + " ")@c.Name
+                    </span>
+                </td>
+                <td class="right nowrap">
+                    @if (AverageFor(c.Id) is { } avg && avg > 0)
+                    {
+                        <span class="muted small">@_settings.Format(avg)</span>
+                        <button class="ghost small" title="Bu ortalamayı sınır kutusuna yaz"
+                                @onclick="() => _inputs[c.Id] = Money.ToInput(avg)">kullan</button>
+                    }
+                    else
+                    {
+                        <span class="muted small">—</span>
+                    }
+                </td>
+                <td>
+                    <input value="@_inputs[c.Id]"
+                           @onchange="e => _inputs[c.Id] = e.Value?.ToString() ?? string.Empty"
+                           inputmode="decimal" placeholder="—" />
+                </td>
+                <td class="right">
+                    <button class="ghost small" @onclick="() => SaveAsync(c.Id)">Kaydet</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</div>
+
+@if (_expenseCategories.Count == 0)
+{
+    <div class="empty">
+        Önce <a href="/kategoriler">bir gider kategorisi</a> oluşturun.
+    </div>
+}
+
+@code {
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+
+    private UserSettings _settings = new("₺", 1);
+    private Period _period = Period.Containing(DateOnly.FromDateTime(DateTime.Now), 1);
+
+    private List<BudgetStatus> _statuses = [];
+    private List<Category> _expenseCategories = [];
+    private Dictionary<int, string> _inputs = [];
+    private BudgetCoverage? _coverage;
+
+    private string? _message;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settings = await Settings.GetAsync();
+        _period = Period.Containing(_today, _settings.PeriodStartDay);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _statuses = await BudgetSvc.StatusAsync(_period);
+        // Anchored to the real current period: the averages behind a suggested
+        // limit should not change because the user browsed back to March.
+        _coverage = await BudgetSvc.CoverageAsync(Period.Containing(_today, _settings.PeriodStartDay));
+        _expenseCategories = (await CategorySvc.ListAsync())
+            .Where(c => c.Kind == EntryKind.Expense)
+            .ToList();
+
+        var limits = await BudgetSvc.LimitsAsync();
+        _inputs = _expenseCategories.ToDictionary(
+            c => c.Id,
+            c => limits.TryGetValue(c.Id, out var v) ? Money.ToInput(v) : "");
+    }
+
+    private async Task OnPeriodChangedAsync(Period period)
+    {
+        _period = period;
+        await LoadAsync();
+    }
+
+    private async Task SaveAsync(int categoryId)
+    {
+        _message = null;
+        _error = null;
+
+        var raw = _inputs.GetValueOrDefault(categoryId, "");
+
+        long limit = 0;
+        if (!string.IsNullOrWhiteSpace(raw) && !Money.TryParse(raw, out limit))
+        {
+            _error = "Sınır sayı olmalı.";
+            return;
+        }
+
+        await BudgetSvc.SetAsync(categoryId, limit);
+        _message = limit > 0 ? "Bütçe kaydedildi." : "Bütçe kaldırıldı.";
+        await LoadAsync();
+    }
+
+    private static string BarState(BudgetStatus b) => b.Over ? "over" : b.Near ? "near" : "ok";
+
+    private long? AverageFor(int categoryId) =>
+        _coverage?.Categories.FirstOrDefault(c => c.Category.Id == categoryId)?.MonthlyAverage;
+
+    /// <summary>Integer percent: a Turkish decimal comma in "width:12,5%" is not valid CSS.</summary>
+    private static int CoveragePercent(BudgetCoverage c) => (int)Math.Round(Math.Clamp(c.Ratio, 0, 1) * 100);
+
+    /// <summary>Unlike a budget bar, a full one is the good outcome here — the colours run the other way.</summary>
+    private static string CoverageState(BudgetCoverage c) =>
+        c.Ratio >= 0.8 ? "ok" : c.Ratio >= 0.5 ? "near" : "over";
+
+    /// <summary>
+    /// Fills the limit box from history rather than saving outright: a suggested
+    /// number is a starting point for the user to round, not a decision the app
+    /// gets to make about their money.
+    /// </summary>
+    private void Suggest(CategorySpend spend)
+    {
+        _error = null;
+        _inputs[spend.Category.Id] = Money.ToInput(spend.MonthlyAverage);
+        _message = $"\"{spend.Category.Name}\" için {_settings.Format(spend.MonthlyAverage)} önerildi — "
+                   + "aşağıdaki tablodan gözden geçirip Kaydet'e basın.";
+    }
+}

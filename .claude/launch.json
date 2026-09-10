@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "expense-tracker",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "ExpenseTracker.csproj", "--launch-profile", "http"],
+      "port": 5290
+    }
+  ]
+}

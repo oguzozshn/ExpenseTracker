@@ -1,0 +1,41 @@
+@* Category totals with a share bar. Percentages are rounded to integers before
+   they reach the style attribute: a Turkish decimal comma in "width:12,5%" is
+   not valid CSS and the bar would silently collapse. *@
+
+@if (Items.Count == 0)
+{
+    <div class="empty">@EmptyText</div>
+}
+else
+{
+    <div class="breakdown">
+        @foreach (var item in Items)
+        {
+            <div class="bd-row">
+                <div class="bd-name">
+                    <span class="dot" style="@($"background:{item.Color}")"></span>
+                    <span class="label">@(string.IsNullOrEmpty(item.Icon) ? "" : item.Icon + " ")@item.Name</span>
+                </div>
+                <div class="nowrap">
+                    <span class="amount">@Money.Format(item.Amount, Currency)</span>
+                    <span class="bd-share">%@Share(item.Amount)</span>
+                </div>
+                <div class="bar">
+                    <span style="@($"width:{Share(item.Amount)}%;background:{item.Color}")"></span>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<CategoryTotal> Items { get; set; } = [];
+
+    [Parameter] public string Currency { get; set; } = "₺";
+
+    [Parameter] public string EmptyText { get; set; } = "Kayıt yok.";
+
+    private long Total => Items.Sum(i => i.Amount);
+
+    private int Share(long amount) => Total <= 0 ? 0 : (int)Math.Round(amount * 100d / Total);
+}

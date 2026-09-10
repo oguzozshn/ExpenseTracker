@@ -1,0 +1,169 @@
+@* The single place a transaction is entered or edited; the dashboard and the
+   transaction list both mount it so the two never drift apart. *@
+
+<div class="card">
+    <div class="spread" style="margin-bottom:.9rem">
+        <h3 style="margin:0">@(Model.IsNew ? "Yeni işlem" : "İşlemi düzenle")</h3>
+        <div class="kind-toggle" style="max-width:230px">
+            <button type="button" class="@KindClass(EntryKind.Expense)" @onclick="() => SetKind(EntryKind.Expense)">
+                Gider
+            </button>
+            <button type="button" class="@KindClass(EntryKind.Income)" @onclick="() => SetKind(EntryKind.Income)">
+                Gelir
+            </button>
+        </div>
+    </div>
+
+    <div class="entry-form">
+        <label class="field">
+            <span>Tutar (@Currency)</span>
+            <input @bind="Model.Amount" @bind:event="oninput" @onkeydown="OnKeyDown"
+                   inputmode="decimal" placeholder="0,00" />
+        </label>
+
+        <label class="field">
+            <span>Kategori</span>
+            <select value="@Model.CategoryId" @onchange="OnCategoryChanged">
+                <option value="0">— seçin —</option>
+                @foreach (var c in VisibleCategories)
+                {
+                    <option value="@c.Id">@(string.IsNullOrEmpty(c.Icon) ? "" : c.Icon + " ")@c.Name</option>
+                }
+            </select>
+        </label>
+
+        <label class="field">
+            <span>Tarih</span>
+            <input type="date" @bind="Model.Date" />
+        </label>
+
+        <label class="field">
+            <span>Hesap</span>
+            <select value="@(Model.AccountId ?? 0)" @onchange="OnAccountChanged">
+                <option value="0">— belirtilmedi —</option>
+                @foreach (var a in Accounts.Where(a => !a.Archived))
+                {
+                    <option value="@a.Id">@(string.IsNullOrEmpty(a.Icon) ? "" : a.Icon + " ")@a.Name</option>
+                }
+            </select>
+        </label>
+
+        <label class="field">
+            <span>Ödeme</span>
+            <select value="@((int)Model.Method)" @onchange="OnMethodChanged">
+                <option value="0">Nakit</option>
+                <option value="1">Kart</option>
+                <option value="2">Havale</option>
+                <option value="3">Diğer</option>
+            </select>
+        </label>
+
+        <label class="field">
+            <span>@(Model.Kind == EntryKind.Income ? "Kaynak" : "Nereye")</span>
+            <input @bind="Model.Payee" list="payee-list" placeholder="Örn. Migros" />
+            <datalist id="payee-list">
+                @foreach (var p in Payees)
+                {
+                    <option value="@p"></option>
+                }
+            </datalist>
+        </label>
+
+        <label class="field">
+            <span>Not</span>
+            <input @bind="Model.Note" @onkeydown="OnKeyDown" placeholder="İsteğe bağlı" />
+        </label>
+    </div>
+
+    <label class="row small" style="margin-top:.9rem;cursor:pointer">
+        <input type="checkbox" checked="@Model.IsTransfer" @onchange="OnTransferChanged" />
+        <span>
+            Hesaplar arası transfer
+            <span class="muted">— kart borcu ödemesi, para çekme. Gelir/gider toplamlarına girmez.</span>
+        </span>
+    </label>
+
+    @if (Error is not null)
+    {
+        <div class="alert err" style="margin:.9rem 0 0">@Error</div>
+    }
+
+    <div class="row" style="margin-top:1rem">
+        <button class="primary" @onclick="SaveAsync">Kaydet</button>
+        <button @onclick="OnCancel">Vazgeç</button>
+        @if (!Model.IsNew && OnDelete.HasDelegate)
+        {
+            <button class="danger ghost" @onclick="OnDelete">Sil</button>
+        }
+        <span class="small muted">Enter ile kaydedebilirsiniz.</span>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public TransactionEntry Model { get; set; } = new();
+
+    [Parameter, EditorRequired] public IReadOnlyList<Category> Categories { get; set; } = [];
+
+    [Parameter] public IReadOnlyList<Account> Accounts { get; set; } = [];
+
+    [Parameter] public IReadOnlyList<string> Payees { get; set; } = [];
+
+    [Parameter] public string Currency { get; set; } = "₺";
+
+    [Parameter] public string? Error { get; set; }
+
+    [Parameter] public EventCallback<Transaction> OnSave { get; set; }
+
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    [Parameter] public EventCallback OnDelete { get; set; }
+
+    /// <summary>Raised when validation fails locally, so the page can show the message.</summary>
+    [Parameter] public EventCallback<string> OnInvalid { get; set; }
+
+    private IEnumerable<Category> VisibleCategories => Categories.Where(c => c.Kind == Model.Kind && !c.Archived);
+
+    private string KindClass(EntryKind kind) =>
+        Model.Kind == kind
+            ? $"on {(kind == EntryKind.Expense ? "expense" : "income")}"
+            : "";
+
+    private void SetKind(EntryKind kind)
+    {
+        if (Model.Kind == kind) return;
+        Model.Kind = kind;
+        // The old category belongs to the other side of the ledger.
+        Model.CategoryId = 0;
+    }
+
+    private void OnCategoryChanged(ChangeEventArgs e) =>
+        Model.CategoryId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+
+    private void OnMethodChanged(ChangeEventArgs e) =>
+        Model.Method = (PaymentMethod)int.Parse(e.Value?.ToString() ?? "0");
+
+    private void OnAccountChanged(ChangeEventArgs e)
+    {
+        var id = int.TryParse(e.Value?.ToString(), out var v) ? v : 0;
+        Model.AccountId = id == 0 ? null : id;
+    }
+
+    private void OnTransferChanged(ChangeEventArgs e) =>
+        Model.IsTransfer = (bool)(e.Value ?? false);
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SaveAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        var error = Model.Validate(out var row);
+        if (error is not null)
+        {
+            await OnInvalid.InvokeAsync(error);
+            return;
+        }
+        await OnSave.InvokeAsync(row);
+    }
+}

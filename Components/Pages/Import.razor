@@ -1,0 +1,576 @@
+@page "/ice-aktar"
+@rendermode InteractiveServer
+@inject SettingsService Settings
+@inject AccountService AccountSvc
+@inject CategoryService CategorySvc
+@inject CategoryRuleService RuleSvc
+@inject StatementImporter Importer
+
+<PageTitle>Ekstre içe aktar</PageTitle>
+
+<h1>Ekstre içe aktar</h1>
+<p class="subtitle">
+    Bankanızın verdiği CSV veya Excel dosyasını yükleyin. Hiçbir şey siz onaylamadan
+    kaydedilmez ve her içe aktarma tek tıkla geri alınabilir.
+</p>
+
+@if (_message is not null)
+{
+    <div class="alert ok">@_message</div>
+}
+@if (_error is not null)
+{
+    <div class="alert err">@_error</div>
+}
+
+@if (_accounts.Count == 0)
+{
+    <div class="empty">
+        Önce bir <a href="/hesaplar">hesap</a> oluşturun; ekstre bir hesaba aktarılır.
+    </div>
+}
+else
+{
+    <div class="card">
+        <h3>1. Dosya</h3>
+
+        <div class="entry-form">
+            <label class="field">
+                <span>Hesap</span>
+                <select value="@_accountId" @onchange="OnAccountChanged">
+                    @foreach (var a in _accounts)
+                    {
+                        <option value="@a.Id">@(string.IsNullOrEmpty(a.Icon) ? "" : a.Icon + " ")@a.Name</option>
+                    }
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Ekstre dosyası (.csv, .txt, .xlsx)</span>
+                <InputFile OnChange="OnFileChosen" accept=".csv,.txt,.xlsx,.xlsm" />
+            </label>
+        </div>
+
+        @if (_fileName is not null)
+        {
+            <p class="small muted" style="margin:.75rem 0 0">
+                <strong>@_fileName</strong> — @_table.Columns.Count sütun, @_table.Rows.Count satır okundu.
+            </p>
+        }
+    </div>
+}
+
+@if (_table.Rows.Count > 0)
+{
+    <div class="card" style="margin-top:1rem">
+        <h3>2. Sütun eşlemesi</h3>
+
+        <div class="entry-form">
+            <label class="field">
+                <span>Tarih</span>
+                <select value="@_map.Date" @onchange="e => SetColumn(c => c.Date = ParseIndex(e))">
+                    @ColumnOptions(required: true)
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Açıklama</span>
+                <select value="@_map.Description" @onchange="e => SetColumn(c => c.Description = ParseIndex(e))">
+                    @ColumnOptions(required: false)
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Tutar (tek sütun)</span>
+                <select value="@_map.Amount" @onchange="e => SetColumn(c => c.Amount = ParseIndex(e))">
+                    @ColumnOptions(required: false)
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Borç (çıkan)</span>
+                <select value="@_map.Debit" @onchange="e => SetColumn(c => c.Debit = ParseIndex(e))">
+                    @ColumnOptions(required: false)
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Alacak (giren)</span>
+                <select value="@_map.Credit" @onchange="e => SetColumn(c => c.Credit = ParseIndex(e))">
+                    @ColumnOptions(required: false)
+                </select>
+            </label>
+        </div>
+
+        <label class="row small" style="margin-top:.9rem;cursor:pointer">
+            <input type="checkbox" checked="@_map.InvertSign" @onchange="OnInvertChanged" />
+            <span>
+                Tutarın işaretini ters çevir
+                <span class="muted">— kredi kartı ekstrelerinde harcamalar çoğunlukla artı yazılır.</span>
+            </span>
+        </label>
+
+        @if (!_map.IsComplete)
+        {
+            <div class="alert err" style="margin:.9rem 0 0">
+                En az tarih ve bir tutar sütunu (ya tek "Tutar" ya da Borç/Alacak) seçilmeli.
+            </div>
+        }
+
+        <details style="margin-top:.9rem">
+            <summary class="small muted" style="cursor:pointer">Dosyanın ilk satırlarını göster</summary>
+            <div class="scroll-x" style="margin-top:.6rem">
+                <table>
+                    <thead>
+                    <tr>
+                        @foreach (var c in _table.Columns)
+                        {
+                            <th>@c</th>
+                        }
+                    </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var row in _table.Rows.Take(5))
+                    {
+                        <tr>
+                            @for (var i = 0; i < _table.Columns.Count; i++)
+                            {
+                                <td class="small">@_table.Cell(row, i)</td>
+                            }
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </details>
+    </div>
+}
+
+@if (_preview is not null)
+{
+    <div class="card" style="margin-top:1rem">
+        <div class="spread">
+            <h3 style="margin:0">3. Önizleme</h3>
+            <label class="row small" style="cursor:pointer">
+                <input type="checkbox" checked="@_onlyProblems" @onchange="OnOnlyProblemsChanged" />
+                <span>Sadece kategorisiz ve hatalı satırlar</span>
+            </label>
+        </div>
+
+        <div class="tiles" style="margin:1rem 0">
+            <div class="tile net">
+                <div class="k">Aktarılacak</div>
+                <div class="v">@_preview.Ready</div>
+                <div class="sub">@_preview.Valid geçerli satırdan</div>
+            </div>
+            <div class="tile expense">
+                <div class="k">Gider</div>
+                <div class="v">@_settings.Format(_preview.ExpenseTotal)</div>
+                <div class="sub">transferler hariç</div>
+            </div>
+            <div class="tile income">
+                <div class="k">Gelir</div>
+                <div class="v">@_settings.Format(_preview.IncomeTotal)</div>
+                <div class="sub">
+                    @(_preview.First is { } f && _preview.Last is { } l
+                        ? $"{f:dd.MM.yyyy} – {l:dd.MM.yyyy}"
+                        : "—")
+                </div>
+            </div>
+            <div class="tile pace">
+                <div class="k">Atlanacak</div>
+                <div class="v">@(_preview.Lines.Count - _preview.Ready)</div>
+                <div class="sub">
+                    @_preview.Duplicates mükerrer · @_preview.Failed hatalı ·
+                    @_preview.Uncategorised kategorisiz · @_preview.Excluded elle çıkarıldı
+                </div>
+            </div>
+        </div>
+
+        @if (_preview.Uncategorised > 0)
+        {
+            <div class="alert info">
+                Kategorisi seçilmemiş satırlar aktarılmaz. Bir satıra kategori verip
+                <strong>Kural yap</strong> derseniz, aynı açıklamayı taşıyan gelecek ekstreler
+                otomatik eşleşir.
+            </div>
+        }
+
+        <div class="scroll-x">
+            <table>
+                <thead>
+                <tr>
+                    <th style="width:1%"></th>
+                    <th>Tarih</th>
+                    <th>Açıklama</th>
+                    <th class="right">Tutar</th>
+                    <th style="width:180px">Kategori</th>
+                    <th>Transfer</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                @foreach (var line in VisibleLines)
+                {
+                    <tr style="@RowStyle(line)">
+                        <td>
+                            @if (line.IsValid && !line.AlreadyImported)
+                            {
+                                <input type="checkbox" checked="@line.Include"
+                                       @onchange="e => line.Include = (bool)(e.Value ?? false)" />
+                            }
+                        </td>
+                        <td class="nowrap muted small">
+                            @(line.IsValid ? line.Date.ToString("dd.MM.yyyy") : line.RawDate)
+                        </td>
+                        <td>
+                            <div>@(line.IsValid ? line.Description : line.RawDescription)</div>
+                            @if (line.Error is not null)
+                            {
+                                <div class="small" style="color:var(--bad)">@line.Error</div>
+                            }
+                            else if (line.AlreadyImported)
+                            {
+                                <div class="small muted">daha önce aktarılmış</div>
+                            }
+                        </td>
+                        <td class="right">
+                            @if (line.IsValid)
+                            {
+                                <span class="amount @(line.Kind == EntryKind.Income ? "income" : "expense")">
+                                    @(line.Kind == EntryKind.Income ? "+" : "−")@_settings.Format(line.AmountMinor)
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="small muted">@line.RawAmount</span>
+                            }
+                        </td>
+                        <td>
+                            @if (line.IsValid && !line.AlreadyImported)
+                            {
+                                <select value="@line.CategoryId"
+                                        @onchange="e => OnLineCategoryChanged(line, e)">
+                                    <option value="0">— seçin —</option>
+                                    @foreach (var c in _categories.Where(c => c.Kind == line.Kind))
+                                    {
+                                        <option value="@c.Id">@(string.IsNullOrEmpty(c.Icon) ? "" : c.Icon + " ")@c.Name</option>
+                                    }
+                                </select>
+                            }
+                        </td>
+                        <td>
+                            @if (line.IsValid && !line.AlreadyImported)
+                            {
+                                <input type="checkbox" checked="@line.IsTransfer"
+                                       @onchange="e => line.IsTransfer = (bool)(e.Value ?? false)" />
+                            }
+                        </td>
+                        <td class="right">
+                            @if (line.IsValid && !line.AlreadyImported && line.CategoryId != 0)
+                            {
+                                <button class="ghost small" @onclick="() => MakeRuleAsync(line)">Kural yap</button>
+                            }
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+
+        @if (VisibleLines.Count < _preview.Lines.Count)
+        {
+            <p class="small muted" style="margin-top:.6rem">
+                @_preview.Lines.Count satırın @VisibleLines.Count tanesi gösteriliyor.
+            </p>
+        }
+
+        <div class="row" style="margin-top:1rem">
+            <button class="primary" disabled="@(_preview.Ready == 0 || _busy)" @onclick="CommitAsync">
+                @_preview.Ready satırı içe aktar
+            </button>
+            <button @onclick="Reset">Vazgeç</button>
+        </div>
+    </div>
+}
+
+@if (_batches.Count > 0)
+{
+    <h2>Geçmiş içe aktarmalar</h2>
+    <div class="card scroll-x">
+        <table>
+            <thead>
+            <tr>
+                <th>Tarih</th>
+                <th>Dosya</th>
+                <th>Hesap</th>
+                <th>Aralık</th>
+                <th class="right">İşlem</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var b in _batches)
+            {
+                <tr>
+                    <td class="nowrap muted small">@b.ImportedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</td>
+                    <td>@b.FileName</td>
+                    <td class="small muted">@b.Account?.Name</td>
+                    <td class="small muted nowrap">
+                        @(b.FirstDate is { } f && b.LastDate is { } l ? $"{f:dd.MM} – {l:dd.MM.yyyy}" : "—")
+                    </td>
+                    <td class="right">@b.Imported</td>
+                    <td class="right">
+                        @if (_confirmUndo == b.Id)
+                        {
+                            <button class="danger small" @onclick="() => UndoAsync(b.Id)">Evet, sil</button>
+                            <button class="ghost small" @onclick="() => _confirmUndo = null">Vazgeç</button>
+                        }
+                        else
+                        {
+                            <button class="ghost small" @onclick="() => _confirmUndo = b.Id">Geri al</button>
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private UserSettings _settings = new("₺", 1);
+    private List<Account> _accounts = [];
+    private List<Category> _categories = [];
+    private List<ImportBatch> _batches = [];
+
+    private int _accountId;
+    private string? _fileName;
+    private StatementTable _table = StatementTable.Empty;
+    private ColumnMap _map = new();
+    private ImportPreview? _preview;
+
+    private bool _onlyProblems;
+    private bool _busy;
+    private int? _confirmUndo;
+    private string? _error;
+    private string? _message;
+
+    private List<ImportLine> VisibleLines =>
+        _preview is null
+            ? []
+            : _onlyProblems
+                ? _preview.Lines.Where(l => !l.IsValid || (l.CategoryId == 0 && !l.AlreadyImported)).ToList()
+                : _preview.Lines.Take(300).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settings = await Settings.GetAsync();
+        _accounts = await AccountSvc.ListAsync();
+        _categories = await CategorySvc.ListAsync();
+        _accountId = _accounts.FirstOrDefault()?.Id ?? 0;
+        _batches = await Importer.BatchesAsync();
+    }
+
+    private async Task OnFileChosen(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _message = null;
+        _preview = null;
+
+        var file = e.File;
+        if (file is null) return;
+
+        if (file.Size > StatementReader.MaxBytes)
+        {
+            _error = $"Dosya çok büyük ({file.Size / 1024 / 1024} MB). En fazla {StatementReader.MaxBytes / 1024 / 1024} MB.";
+            return;
+        }
+
+        try
+        {
+            await using var stream = file.OpenReadStream(StatementReader.MaxBytes);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+
+            _fileName = file.Name;
+            _table = StatementImporter.Read(buffer.ToArray(), file.Name);
+        }
+        catch (Exception ex)
+        {
+            // A wrong file type or a corrupt workbook must not take the circuit down.
+            _error = $"Dosya okunamadı: {ex.Message}";
+            _table = StatementTable.Empty;
+            return;
+        }
+
+        if (_table.Rows.Count == 0)
+        {
+            _error = "Dosyada tablo bulunamadı. Bankadan CSV veya Excel biçiminde indirmeyi deneyin.";
+            return;
+        }
+
+        _map = ColumnMap.Guess(_table.Columns);
+        await RefreshPreviewAsync(guessSign: true);
+    }
+
+    private async Task RefreshPreviewAsync(bool guessSign = false)
+    {
+        if (!_map.IsComplete)
+        {
+            _preview = null;
+            return;
+        }
+
+        _preview = await Importer.PreviewAsync(_table, _map, _accountId);
+
+        if (guessSign)
+        {
+            var account = _accounts.FirstOrDefault(a => a.Id == _accountId);
+            if (account is not null && StatementImporter.LooksInverted(_preview, account.Type))
+            {
+                _map.InvertSign = true;
+                _preview = await Importer.PreviewAsync(_table, _map, _accountId);
+            }
+        }
+    }
+
+    private RenderFragment ColumnOptions(bool required) => builder =>
+    {
+        var seq = 0;
+        if (!required)
+        {
+            builder.OpenElement(seq++, "option");
+            builder.AddAttribute(seq++, "value", "-1");
+            builder.AddContent(seq++, "— yok —");
+            builder.CloseElement();
+        }
+
+        for (var i = 0; i < _table.Columns.Count; i++)
+        {
+            builder.OpenElement(seq++, "option");
+            builder.AddAttribute(seq++, "value", i.ToString());
+            builder.AddContent(seq++, _table.Columns[i]);
+            builder.CloseElement();
+        }
+    };
+
+    private static int ParseIndex(ChangeEventArgs e) =>
+        int.TryParse(e.Value?.ToString(), out var v) ? v : -1;
+
+    private async Task SetColumn(Action<ColumnMap> apply)
+    {
+        apply(_map);
+
+        // The two amount styles are mutually exclusive; picking one clears the other
+        // so a half-set mapping never silently reads the wrong column.
+        if (_map.Amount >= 0 && _map.UsesDebitCredit)
+        {
+            _map.Debit = -1;
+            _map.Credit = -1;
+        }
+
+        await RefreshPreviewAsync();
+    }
+
+    private async Task OnAccountChanged(ChangeEventArgs e)
+    {
+        _accountId = int.TryParse(e.Value?.ToString(), out var v) ? v : 0;
+        if (_table.Rows.Count > 0) await RefreshPreviewAsync();
+    }
+
+    private async Task OnInvertChanged(ChangeEventArgs e)
+    {
+        _map.InvertSign = (bool)(e.Value ?? false);
+        await RefreshPreviewAsync();
+    }
+
+    private void OnOnlyProblemsChanged(ChangeEventArgs e) => _onlyProblems = (bool)(e.Value ?? false);
+
+    private void OnLineCategoryChanged(ImportLine line, ChangeEventArgs e)
+    {
+        line.CategoryId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        // The suggestion no longer came from the rule, so it must not be credited to it.
+        line.RuleId = null;
+    }
+
+    private async Task MakeRuleAsync(ImportLine line)
+    {
+        var saved = await RuleSvc.SaveAsync(new CategoryRule
+        {
+            Contains = line.Description,
+            CategoryId = line.CategoryId,
+            MarksTransfer = line.IsTransfer
+        });
+
+        if (saved is null)
+        {
+            _error = "Kural oluşturulamadı: açıklama çok kısa.";
+            return;
+        }
+
+        // Apply it to every other line still waiting for a category.
+        var applied = 0;
+        foreach (var other in _preview!.Lines.Where(l => l.Writable && l.CategoryId == 0))
+        {
+            if (!StatementText.Contains(other.Description, saved.Contains)) continue;
+            other.CategoryId = saved.CategoryId;
+            other.IsTransfer = saved.MarksTransfer;
+            other.RuleId = saved.Id;
+            applied++;
+        }
+
+        _message = applied > 0
+            ? $"Kural kaydedildi ve {applied} satıra daha uygulandı."
+            : "Kural kaydedildi.";
+    }
+
+    private async Task CommitAsync()
+    {
+        if (_preview is null || _busy) return;
+
+        _busy = true;
+        try
+        {
+            var result = await Importer.CommitAsync(_preview, _accountId, _fileName ?? "ekstre");
+            await RuleSvc.RecordUseAsync(_preview.Lines.Where(l => l.Writable && l.RuleId is not null)
+                .Select(l => l.RuleId!.Value));
+
+            _message = $"{result.Imported} işlem içe aktarıldı, {result.Skipped} satır atlandı.";
+            Reset();
+            _batches = await Importer.BatchesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"İçe aktarma başarısız: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task UndoAsync(int batchId)
+    {
+        var removed = await Importer.UndoAsync(batchId);
+        _confirmUndo = null;
+        _message = $"{removed} işlem silindi.";
+        _batches = await Importer.BatchesAsync();
+    }
+
+    private void Reset()
+    {
+        _preview = null;
+        _table = StatementTable.Empty;
+        _fileName = null;
+        _map = new ColumnMap();
+        _onlyProblems = false;
+    }
+
+    private static string RowStyle(ImportLine line)
+    {
+        if (!line.IsValid) return "opacity:.6";
+        if (line.AlreadyImported) return "opacity:.5";
+        return line.Include ? "" : "opacity:.5";
+    }
+}

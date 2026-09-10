@@ -1,0 +1,30 @@
+@inherits LayoutComponentBase
+
+<div class="shell">
+    <header class="topbar">
+        <a class="brand" href="/">
+            <span class="brand-dot"></span>
+            Expense<strong>Tracker</strong>
+        </a>
+        <nav class="nav">
+            <NavLink href="/" Match="NavLinkMatch.All">Panel</NavLink>
+            <NavLink href="/islemler">İşlemler</NavLink>
+            <NavLink href="/hesaplar">Hesaplar</NavLink>
+            <NavLink href="/butceler">Bütçeler</NavLink>
+            <NavLink href="/duzenli">Düzenli</NavLink>
+            <NavLink href="/kategoriler">Kategoriler</NavLink>
+            <NavLink href="/ice-aktar">İçe aktar</NavLink>
+            <NavLink href="/ayarlar">Ayarlar</NavLink>
+        </nav>
+    </header>
+
+    <main class="content">
+        @Body
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    Beklenmeyen bir hata oluştu.
+    <a href="." class="reload">Yeniden yükle</a>
+    <span class="dismiss">🗙</span>
+</div>

@@ -1,0 +1,79 @@
+@* Daily spend inside a period. Every coordinate is an integer on a fixed grid,
+   because interpolating a double into SVG would emit a Turkish decimal comma
+   and silently produce an invalid path. *@
+
+@if (Days.Count == 0)
+{
+    <div class="empty">Bu dönemde işlem yok.</div>
+}
+else
+{
+    <svg class="chart" viewBox="@($"0 0 {Width} {Height}")" preserveAspectRatio="none" role="img"
+         aria-label="Günlük harcama grafiği">
+        @if (Average > 0)
+        {
+            <line class="avg-line" x1="0" y1="@AverageY" x2="@Width" y2="@AverageY" />
+        }
+
+        @for (var i = 0; i < Days.Count; i++)
+        {
+            var day = Days[i];
+            var height = BarHeight(day.Expense);
+            var x = i * Step + BarGap;
+            <rect class="@BarClass(day)" x="@x" y="@(PlotBottom - height)" width="@BarWidth" height="@height">
+                <title>@day.Date.ToString("d MMMM", Money.Culture): @Money.Format(day.Expense, Currency)</title>
+            </rect>
+        }
+
+        <line class="base-line" x1="0" y1="@PlotBottom" x2="@Width" y2="@PlotBottom" />
+    </svg>
+
+    <div class="spread small muted" style="margin-top:.4rem">
+        <span>@Days[0].Date.ToString("d MMM", Money.Culture)</span>
+        <span>En yüksek gün: @Money.Format(Max, Currency)</span>
+        <span>@Days[^1].Date.ToString("d MMM", Money.Culture)</span>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<DayTotal> Days { get; set; } = [];
+
+    [Parameter] public string Currency { get; set; } = "₺";
+
+    private const int Step = 16;
+    private const int BarGap = 2;
+    private const int BarWidth = Step - BarGap * 2;
+    private const int Height = 120;
+    private const int PlotBottom = 110;
+    private const int PlotHeight = 100;
+
+    private int Width => Math.Max(Days.Count, 1) * Step;
+
+    private long Max => Days.Count == 0 ? 0 : Days.Max(d => d.Expense);
+
+    private long Average
+    {
+        get
+        {
+            var spending = Days.Where(d => d.Expense > 0).ToList();
+            return spending.Count == 0 ? 0 : (long)spending.Average(d => d.Expense);
+        }
+    }
+
+    private int AverageY => PlotBottom - BarHeight(Average);
+
+    private int BarHeight(long value)
+    {
+        if (Max <= 0 || value <= 0) return 0;
+        // A day with any spending at all is worth at least one visible pixel.
+        return Math.Max(1, (int)(value * PlotHeight / Max));
+    }
+
+    private string BarClass(DayTotal day)
+    {
+        if (day.Date == DateOnly.FromDateTime(DateTime.Now)) return "bar-day today";
+        return day.Date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
+            ? "bar-day weekend"
+            : "bar-day";
+    }
+}

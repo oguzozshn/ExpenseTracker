@@ -1,0 +1,29 @@
+@* Period switcher shared by the dashboard, the transaction list and the budgets page. *@
+
+<div class="row">
+    <div class="period">
+        <button type="button" title="Önceki dönem" @onclick="() => ShiftAsync(-1)">‹</button>
+        <span class="label">@Value.Label</span>
+        <button type="button" title="Sonraki dönem" disabled="@IsCurrent" @onclick="() => ShiftAsync(1)">›</button>
+    </div>
+    @if (!IsCurrent)
+    {
+        <button type="button" class="ghost small" @onclick="GoToCurrentAsync">Bugüne dön</button>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Period Value { get; set; }
+
+    [Parameter] public EventCallback<Period> ValueChanged { get; set; }
+
+    /// <summary>Day the period starts on, so "today" resolves to the same period the rest of the app uses.</summary>
+    [Parameter] public int StartDay { get; set; } = 1;
+
+    private bool IsCurrent => Value.Contains(DateOnly.FromDateTime(DateTime.Now));
+
+    private Task ShiftAsync(int months) => ValueChanged.InvokeAsync(Value.Shift(months));
+
+    private Task GoToCurrentAsync() =>
+        ValueChanged.InvokeAsync(Period.Containing(DateOnly.FromDateTime(DateTime.Now), StartDay));
+}

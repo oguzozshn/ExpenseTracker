@@ -1,0 +1,141 @@
+@page "/ayarlar"
+@rendermode InteractiveServer
+@* Named SettingsSvc, not Settings: a member cannot share its name with the enclosing component. *@
+@inject SettingsService SettingsSvc
+@inject TransactionService TransactionSvc
+@inject DataPaths Paths
+
+<PageTitle>Ayarlar</PageTitle>
+
+<h1>Ayarlar</h1>
+<p class="subtitle">Para birimi ve dönem başlangıcı tüm raporlarda kullanılır.</p>
+
+@if (_message is not null)
+{
+    <div class="alert ok">@_message</div>
+}
+@if (_error is not null)
+{
+    <div class="alert err">@_error</div>
+}
+
+<div class="grid cols-2">
+    <div class="card">
+        <h3>Görünüm</h3>
+
+        <label class="field">
+            <span>Para birimi simgesi</span>
+            <input @bind="_currency" maxlength="4" placeholder="₺" />
+        </label>
+
+        <label class="field">
+            <span>Dönem başlangıç günü</span>
+            <input type="number" min="1" max="28" @bind="_startDay" />
+        </label>
+
+        <p class="small muted">
+            1 bırakırsanız dönemler takvim ayıdır. Maaşınız ayın 15'inde yatıyorsa 15 yapın;
+            bütçeler ve raporlar 15'inden bir sonraki ayın 14'üne kadar hesaplanır.
+            En fazla 28 olabilir, çünkü şubatta 29-31 her yıl yoktur.
+        </p>
+
+        <p class="small muted">
+            Şu anki dönem: <strong>@Preview.Label</strong>
+        </p>
+
+        <div class="row">
+            <button class="primary" @onclick="SaveAsync">Kaydet</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Veri</h3>
+
+        <table>
+            <tbody>
+            <tr>
+                <td class="muted">İşlem</td>
+                <td class="right">@_stats.Transactions</td>
+            </tr>
+            <tr>
+                <td class="muted">Kategori</td>
+                <td class="right">@_stats.Categories</td>
+            </tr>
+            <tr>
+                <td class="muted">Düzenli kural</td>
+                <td class="right">@_stats.Rules</td>
+            </tr>
+            <tr>
+                <td class="muted">Aralık</td>
+                <td class="right">
+                    @if (_stats.First is { } first && _stats.Last is { } last)
+                    {
+                        <text>@first.ToString("dd.MM.yyyy") – @last.ToString("dd.MM.yyyy")</text>
+                    }
+                    else
+                    {
+                        <text>—</text>
+                    }
+                </td>
+            </tr>
+            <tr>
+                <td class="muted">Dosya boyutu</td>
+                <td class="right">@(Paths.DatabaseBytes / 1024) KB</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <p class="small muted" style="margin-top:.9rem">
+            Veritabanı kullanıcı profilinizde duruyor, uygulamanın yanında değil; bu yüzden
+            projeyi yeniden derlemek geçmişinizi silmez.
+        </p>
+        <p class="small" style="word-break:break-all">
+            <code>@Paths.DatabaseFile</code>
+        </p>
+
+        <div class="row" style="margin-top:.5rem">
+            <a class="btn" href="/export.csv">Tüm işlemleri CSV indir</a>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _currency = "₺";
+    private int _startDay = 1;
+    private LedgerStats _stats = new(0, 0, 0, null, null);
+    private string? _message;
+    private string? _error;
+
+    /// <summary>Live preview of what the start-day box does, before it is saved.</summary>
+    private Period Preview =>
+        Period.Containing(DateOnly.FromDateTime(DateTime.Now), Period.NormalizeStartDay(_startDay));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var settings = await SettingsSvc.GetAsync();
+        _currency = settings.Currency;
+        _startDay = settings.PeriodStartDay;
+        _stats = await TransactionSvc.StatsAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        _message = null;
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_currency))
+        {
+            _error = "Para birimi simgesi boş olamaz.";
+            return;
+        }
+
+        if (_startDay is < 1 or > 28)
+        {
+            _error = "Dönem başlangıç günü 1 ile 28 arasında olmalı.";
+            return;
+        }
+
+        await SettingsSvc.SaveAsync(new UserSettings(_currency.Trim(), _startDay));
+        _message = "Ayarlar kaydedildi.";
+    }
+}

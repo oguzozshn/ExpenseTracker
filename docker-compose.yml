@@ -1,0 +1,14 @@
+services:
+  expense-tracker:
+    build: .
+    image: expense-tracker
+    container_name: expense-tracker
+    restart: unless-stopped
+    # Bound to loopback only: tailscale serve is the sole way in, so the port is
+    # never exposed on the public Hetzner interface.
+    ports:
+      - "127.0.0.1:5290:8080"
+    # A bind mount rather than a named volume keeps expenses.db reachable from
+    # the host for backups and for seeding the initial ledger.
+    volumes:
+      - ./data:/data

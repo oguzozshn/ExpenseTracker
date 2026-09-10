@@ -1,0 +1,243 @@
+@page "/kategoriler"
+@rendermode InteractiveServer
+@inject CategoryService CategorySvc
+
+<PageTitle>Kategoriler</PageTitle>
+
+<div class="spread">
+    <div>
+        <h1>Kategoriler</h1>
+        <p class="subtitle">
+            Her işlem bir kategoriye bağlıdır. Kullanmadığınız bir kategoriyi silmek yerine
+            arşivlerseniz geçmiş raporlarınız bozulmaz.
+        </p>
+    </div>
+    <button class="primary" @onclick="() => NewCategory(EntryKind.Expense)">+ Yeni kategori</button>
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert ok">@_message</div>
+}
+
+@if (_error is not null && _editing is null)
+{
+    <div class="alert err">@_error</div>
+}
+
+@if (_editing is not null)
+{
+    <div class="card" style="margin-bottom:1.25rem">
+        <h3>@(_editing.Id == 0 ? "Yeni kategori" : "Düzenle")</h3>
+
+        <div class="entry-form">
+            <label class="field">
+                <span>Ad</span>
+                <input @bind="_editing.Name" placeholder="Örn. Market" />
+            </label>
+
+            <label class="field">
+                <span>Tür</span>
+                <select value="@((int)_editing.Kind)" @onchange="OnKindChanged" disabled="@(_editing.Id != 0)">
+                    <option value="0">Gider</option>
+                    <option value="1">Gelir</option>
+                </select>
+            </label>
+
+            <label class="field">
+                <span>Simge</span>
+                <input @bind="_editing.Icon" maxlength="4" placeholder="🛒" />
+            </label>
+
+            <label class="field">
+                <span>Renk</span>
+                <input type="color" @bind="_editing.Color" />
+            </label>
+        </div>
+
+        @if (_editing.Id != 0)
+        {
+            <p class="small muted" style="margin:.75rem 0 0">
+                Tür değiştirilemez: geçmiş işlemler kendi türlerini taşır, kategoriyi çevirmek
+                onları tutarsız hale getirirdi.
+            </p>
+        }
+
+        @if (_error is not null)
+        {
+            <div class="alert err" style="margin:.9rem 0 0">@_error</div>
+        }
+
+        <div class="row" style="margin-top:1rem">
+            <button class="primary" @onclick="SaveAsync">Kaydet</button>
+            <button @onclick="() => { _editing = null; _error = null; }">Vazgeç</button>
+        </div>
+    </div>
+}
+
+@foreach (var kind in new[] { EntryKind.Expense, EntryKind.Income })
+{
+    var items = _categories.Where(c => c.Kind == kind).ToList();
+
+    <h2>@(kind == EntryKind.Expense ? "Gider kategorileri" : "Gelir kategorileri")</h2>
+
+    @if (items.Count == 0)
+    {
+        <div class="empty">
+            Kategori yok.
+            <button class="ghost small" @onclick="() => NewCategory(kind)">Ekle</button>
+        </div>
+    }
+    else
+    {
+        <div class="card scroll-x">
+            <table>
+                <thead>
+                <tr>
+                    <th style="width:1%"></th>
+                    <th>Ad</th>
+                    <th>Kullanım</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                @foreach (var c in items)
+                {
+                    <tr style="@(c.Archived ? "opacity:.55" : "")">
+                        <td>
+                            <span class="dot" style="@($"background:{c.Color};width:12px;height:12px;border-radius:50%;display:inline-block")"></span>
+                        </td>
+                        <td>
+                            @(string.IsNullOrEmpty(c.Icon) ? "" : c.Icon + " ")@c.Name
+                            @if (c.Archived)
+                            {
+                                <span class="pill">arşiv</span>
+                            }
+                        </td>
+                        <td class="small muted">
+                            @(_usage.TryGetValue(c.Id, out var u) ? $"{u} işlem" : "0 işlem")
+                        </td>
+                        <td class="right nowrap">
+                            <button class="ghost icon" title="Yukarı" @onclick="() => MoveAsync(c.Id, -1)">↑</button>
+                            <button class="ghost icon" title="Aşağı" @onclick="() => MoveAsync(c.Id, 1)">↓</button>
+                            <button class="ghost small" @onclick="() => Edit(c)">Düzenle</button>
+                            <button class="ghost small" @onclick="() => ToggleArchiveAsync(c)">
+                                @(c.Archived ? "Geri al" : "Arşivle")
+                            </button>
+                            @if (!_usage.ContainsKey(c.Id))
+                            {
+                                <button class="ghost small danger" @onclick="() => DeleteAsync(c.Id)">Sil</button>
+                            }
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    private List<Category> _categories = [];
+
+    /// <summary>Category id to transaction count; only used to decide whether deleting is offered.</summary>
+    private Dictionary<int, int> _usage = [];
+
+    private Category? _editing;
+    private string? _error;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _categories = await CategorySvc.ListAsync(includeArchived: true);
+
+        var usage = new Dictionary<int, int>();
+        foreach (var c in _categories)
+        {
+            var (transactions, rules) = await CategorySvc.UsageAsync(c.Id);
+            var total = transactions + rules;
+            if (total > 0) usage[c.Id] = total;
+        }
+        _usage = usage;
+    }
+
+    private void NewCategory(EntryKind kind)
+    {
+        _error = null;
+        _message = null;
+        _editing = new Category { Kind = kind, Color = "#5b8def" };
+    }
+
+    private void Edit(Category c)
+    {
+        _error = null;
+        _message = null;
+        // Copy so cancelling does not leave edits on the list row.
+        _editing = new Category
+        {
+            Id = c.Id,
+            Name = c.Name,
+            Kind = c.Kind,
+            Color = c.Color,
+            Icon = c.Icon,
+            Archived = c.Archived,
+            SortOrder = c.SortOrder
+        };
+    }
+
+    private void OnKindChanged(ChangeEventArgs e)
+    {
+        if (_editing is null) return;
+        _editing.Kind = (EntryKind)int.Parse(e.Value?.ToString() ?? "0");
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is null) return;
+
+        if (string.IsNullOrWhiteSpace(_editing.Name))
+        {
+            _error = "Ad boş olamaz.";
+            return;
+        }
+
+        var saved = await CategorySvc.SaveAsync(_editing);
+        if (saved is null)
+        {
+            _error = "Bu türde aynı adla bir kategori zaten var.";
+            return;
+        }
+
+        _message = $"\"{saved.Name}\" kaydedildi.";
+        _editing = null;
+        _error = null;
+        await LoadAsync();
+    }
+
+    private async Task ToggleArchiveAsync(Category c)
+    {
+        await CategorySvc.SetArchivedAsync(c.Id, !c.Archived);
+        _message = c.Archived ? $"\"{c.Name}\" geri alındı." : $"\"{c.Name}\" arşivlendi.";
+        await LoadAsync();
+    }
+
+    private async Task MoveAsync(int id, int direction)
+    {
+        await CategorySvc.MoveAsync(id, direction);
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        if (!await CategorySvc.DeleteAsync(id))
+        {
+            _message = null;
+            _error = "Kategori kullanımda olduğu için silinemedi; arşivleyebilirsiniz.";
+            return;
+        }
+        _message = "Kategori silindi.";
+        await LoadAsync();
+    }
+}

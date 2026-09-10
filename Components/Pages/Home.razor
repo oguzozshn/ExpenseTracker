@@ -1,0 +1,396 @@
+@page "/"
+@rendermode InteractiveServer
+@inject SettingsService Settings
+@inject CategoryService CategorySvc
+@inject TransactionService TransactionSvc
+@inject BudgetService BudgetSvc
+@inject RecurringService RecurringSvc
+@inject AccountService AccountSvc
+@inject ForecastService ForecastSvc
+
+<PageTitle>Panel</PageTitle>
+
+<div class="spread">
+    <div>
+        <h1>Panel</h1>
+        <p class="subtitle">@_period.Label dönemi</p>
+    </div>
+    <div class="row">
+        <PeriodNav Value="_period" ValueChanged="OnPeriodChangedAsync" StartDay="_settings.PeriodStartDay" />
+        @if (_entry is null)
+        {
+            <button class="primary" @onclick="StartNewAsync">+ İşlem ekle</button>
+        }
+    </div>
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert ok">@_message</div>
+}
+
+@if (_entry is not null)
+{
+    <div style="margin-bottom:1.25rem">
+        <TransactionForm Model="_entry"
+                         Categories="_categories"
+                         Accounts="_accounts"
+                         Payees="_payees"
+                         Currency="@_settings.Currency"
+                         Error="@_error"
+                         OnSave="SaveAsync"
+                         OnInvalid="e => _error = e"
+                         OnCancel="() => { _entry = null; _error = null; }" />
+    </div>
+}
+
+<div class="tiles">
+    <div class="tile expense">
+        <div class="k">Gider</div>
+        <div class="v">@_settings.Format(_summary.Expense)</div>
+        <div class="sub">@_summary.Count işlem</div>
+    </div>
+    <div class="tile income">
+        <div class="k">Gelir</div>
+        <div class="v">@_settings.Format(_summary.Income)</div>
+        <div class="sub">@(_summary.Income > 0 ? "dönem içinde" : "kayıt yok")</div>
+    </div>
+    <div class="tile net">
+        <div class="k">Net</div>
+        <div class="v" style="@(_summary.Net < 0 ? "color:var(--bad)" : "")">@_settings.FormatSigned(_summary.Net)</div>
+        <div class="sub">@(_summary.Net < 0 ? "gelirden fazla harcandı" : "artıda")</div>
+    </div>
+    <div class="tile pace">
+        <div class="k">Günlük ortalama</div>
+        <div class="v">@_settings.Format(_summary.DailyPace(_today))</div>
+        <div class="sub">
+            @if (_period.Contains(_today))
+            {
+                <text>dönem sonu tahmini @_settings.Format(_summary.Projected(_today))</text>
+            }
+            else
+            {
+                <text>@_period.DayCount günlük dönem</text>
+            }
+        </div>
+    </div>
+</div>
+
+@if (_balances.Count > 0)
+{
+    <div class="card" style="margin-top:1.25rem">
+        <div class="spread" style="margin-bottom:.6rem">
+            <h3 style="margin:0">Hesaplar</h3>
+            <a class="small" href="/hesaplar">Tümü</a>
+        </div>
+        <div class="row" style="gap:1.5rem">
+            @foreach (var b in _balances)
+            {
+                <div>
+                    <div class="small muted">
+                        <span class="dot" style="@($"background:{b.Account.Color};display:inline-block")"></span>
+                        @(string.IsNullOrEmpty(b.Account.Icon) ? "" : b.Account.Icon + " ")@b.Account.Name
+                    </div>
+                    <div class="amount @(b.Balance < 0 ? "expense" : "income")" style="font-size:1.15rem">
+                        @_settings.Format(b.Balance)
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if (_forecasts.Count > 0)
+{
+    <div class="card" style="margin-top:1.25rem">
+        <div class="spread" style="margin-bottom:.6rem">
+            <h3 style="margin:0">Kart borç tahmini</h3>
+            <span class="small muted">@_forecasts[0].Period.Label</span>
+        </div>
+
+        @foreach (var f in _forecasts)
+        {
+            <div style="margin-bottom:1rem">
+                <div class="spread">
+                    <span class="small muted">
+                        <span class="dot" style="@($"background:{f.Account.Color};display:inline-block")"></span>
+                        @(string.IsNullOrEmpty(f.Account.Icon) ? "" : f.Account.Icon + " ")@f.Account.Name
+                    </span>
+                    <span class="small muted">şu anki borç @_settings.Format(f.CurrentDebt)</span>
+                </div>
+
+                <div class="amount expense" style="font-size:1.5rem;margin:.2rem 0">
+                    @_settings.Format(f.Mid)
+                </div>
+
+                <div class="small muted">
+                    tahmin aralığı @_settings.Format(f.Low) – @_settings.Format(f.High)
+                    · @f.BasisPeriods dönemlik geçmişe dayanıyor
+                </div>
+
+                @if (f.Recurring > 0)
+                {
+                    <div class="small muted" style="margin-top:.2rem">
+                        bunun @_settings.Format(f.Recurring) kadarı bu karta bağlı düzenli işlemlerden
+                    </div>
+                }
+                else if (_rulesWithoutAccount > 0)
+                {
+                    <div class="small muted" style="margin-top:.2rem">
+                        Bu karta bağlı düzenli işlem yok. <a href="/duzenli">@_rulesWithoutAccount kuralın</a>
+                        hesabı seçili değil; seçerseniz tahmin keskinleşir.
+                    </div>
+                }
+            </div>
+        }
+
+        <p class="small muted" style="margin:0">
+            Geçmiş dönemlerin harcama hızından hesaplanır; iki farklı yöntemin verdiği
+            alt ve üst sınır gösterilir. Tek büyük bir alışveriş bu aralığı aşar.
+        </p>
+    </div>
+}
+
+<div class="grid cols-2" style="margin-top:1.25rem">
+    <div class="card">
+        <h3>Günlük harcama</h3>
+        <DailyChart Days="_summary.Daily" Currency="@_settings.Currency" />
+    </div>
+
+    <div class="card">
+        <h3>Kategoriye göre gider</h3>
+        <CategoryBreakdown Items="_expenseCategories"
+                           Currency="@_settings.Currency"
+                           EmptyText="Bu dönemde gider yok." />
+    </div>
+</div>
+
+<div class="grid cols-2" style="margin-top:1rem">
+    <div class="card">
+        <div class="spread" style="margin-bottom:.5rem">
+            <h3 style="margin:0">Bütçeler</h3>
+            <a class="small" href="/butceler">Tümü</a>
+        </div>
+
+        @if (_budgets.Count == 0)
+        {
+            <p class="small muted" style="margin:0">
+                Henüz bütçe yok. <a href="/butceler">Bütçeler</a> sayfasından bir kategoriye
+                aylık sınır koyduğunuzda burada takip edebilirsiniz.
+            </p>
+        }
+        else
+        {
+            @foreach (var b in _budgets.Take(4))
+            {
+                <div class="budget-row">
+                    <div class="spread small">
+                        <span class="bd-name">
+                            <span class="dot" style="@($"background:{b.Category.Color}")"></span>
+                            @b.Category.Name
+                        </span>
+                        <span class="muted">
+                            @_settings.Format(b.Spent) / @_settings.Format(b.Limit)
+                        </span>
+                    </div>
+                    <div class="bar" style="margin-top:.35rem">
+                        <span class="@BarState(b)" style="@($"width:{(int)Math.Round(b.Fill * 100)}%")"></span>
+                    </div>
+                </div>
+            }
+        }
+    </div>
+
+    <div class="card">
+        <div class="spread" style="margin-bottom:.5rem">
+            <h3 style="margin:0">Yaklaşan düzenli işlemler</h3>
+            <a class="small" href="/duzenli">Tümü</a>
+        </div>
+
+        @if (_upcoming.Count == 0)
+        {
+            <p class="small muted" style="margin:0">
+                Önümüzdeki 30 günde düzenli işlem yok.
+            </p>
+        }
+        else
+        {
+            <table>
+                <tbody>
+                @foreach (var (rule, date) in _upcoming)
+                {
+                    <tr>
+                        <td class="nowrap muted small">@date.ToString("d MMM", Money.Culture)</td>
+                        <td>@rule.Name</td>
+                        <td class="right">
+                            <span class="amount @(rule.Kind == EntryKind.Income ? "income" : "expense")">
+                                @_settings.Format(rule.AmountMinor)
+                            </span>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+<div class="card" style="margin-top:1rem">
+    <h3>Son 6 dönem</h3>
+    @if (_trend.Count == 0 || _trendMax == 0)
+    {
+        <p class="small muted" style="margin:0">Karşılaştırılacak veri yok.</p>
+    }
+    else
+    {
+        <div class="trend">
+            @foreach (var t in _trend)
+            {
+                <div class="col @(t.Period.Start == _period.Start ? "current" : "")">
+                    <div class="fill" style="@($"height:{TrendHeight(t.Expense)}%")"
+                         title="@t.Period.Label: @_settings.Format(t.Expense)"></div>
+                    <div class="cap">@t.Period.ShortLabel</div>
+                </div>
+            }
+        </div>
+        <div class="spread small muted" style="margin-top:.5rem">
+            <span>En yüksek: @_settings.Format(_trendMax)</span>
+            <span>Ortalama: @_settings.Format((long)_trend.Average(t => t.Expense))</span>
+        </div>
+    }
+</div>
+
+<div class="card" style="margin-top:1rem">
+    <div class="spread" style="margin-bottom:.5rem">
+        <h3 style="margin:0">Son işlemler</h3>
+        <a class="small" href="/islemler">Tümü</a>
+    </div>
+
+    @if (_recent.Count == 0)
+    {
+        <div class="empty">
+            Henüz işlem yok. Yukarıdaki <strong>+ İşlem ekle</strong> ile başlayın.
+        </div>
+    }
+    else
+    {
+        <div class="scroll-x">
+            <table>
+                <tbody>
+                @foreach (var t in _recent)
+                {
+                    <tr>
+                        <td class="nowrap muted small">@t.OccurredOn.ToString("d MMM", Money.Culture)</td>
+                        <td>
+                            <span class="pill">
+                                <span class="dot" style="@($"background:{t.Category?.Color ?? "#8b93a3"}")"></span>
+                                @t.Category?.Name
+                            </span>
+                        </td>
+                        <td class="grow">@(string.IsNullOrEmpty(t.Payee) ? t.Note : t.Payee)</td>
+                        <td class="right">
+                            <span class="amount @(t.Kind == EntryKind.Income ? "income" : "expense")">
+                                @(t.Kind == EntryKind.Income ? "+" : "−")@_settings.Format(t.AmountMinor)
+                            </span>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+
+    private UserSettings _settings = new("₺", 1);
+
+    // Seeded with the calendar month so the first render — which happens before
+    // the settings are loaded — shows a sane header instead of "Ocak 0001".
+    private Period _period = Period.Containing(DateOnly.FromDateTime(DateTime.Now), 1);
+    private PeriodSummary _summary = PeriodSummary.Empty(Period.Containing(DateOnly.FromDateTime(DateTime.Now), 1));
+    private List<CategoryTotal> _expenseCategories = [];
+    private List<BudgetStatus> _budgets = [];
+    private List<(RecurringRule Rule, DateOnly Date)> _upcoming = [];
+    private List<(Period Period, long Expense, long Income)> _trend = [];
+    private List<Transaction> _recent = [];
+    private List<Category> _categories = [];
+    private List<Account> _accounts = [];
+    private List<AccountBalance> _balances = [];
+    private List<CardForecast> _forecasts = [];
+    private int _rulesWithoutAccount;
+    private List<string> _payees = [];
+
+    private TransactionEntry? _entry;
+    private string? _error;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settings = await Settings.GetAsync();
+        _period = Period.Containing(_today, _settings.PeriodStartDay);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _summary = await TransactionSvc.SummaryAsync(_period);
+        _expenseCategories = _summary.ByCategory.Where(c => c.Kind == EntryKind.Expense).ToList();
+        _budgets = await BudgetSvc.StatusAsync(_period);
+        _trend = await TransactionSvc.TrendAsync(_period, 6);
+        _recent = await TransactionSvc.ListAsync(new TransactionFilter(Take: 8));
+        _categories = await CategorySvc.ListAsync();
+        _accounts = await AccountSvc.ListAsync();
+        _balances = await AccountSvc.BalancesAsync();
+
+        // Anchored to today rather than the period on screen: the forecast is always
+        // about the period that has not started yet, even while browsing March.
+        _forecasts = await ForecastSvc.CardsAsync(_today, _settings.PeriodStartDay);
+
+        var rules = await RecurringSvc.ListAsync();
+        _rulesWithoutAccount = rules.Count(r => r.AccountId is null && !r.Paused);
+        var horizon = _today.AddDays(30);
+        _upcoming = rules
+            .Select(r => (Rule: r, Date: RecurringService.NextOccurrence(r, _today)))
+            .Where(x => x.Date is not null && x.Date <= horizon)
+            .Select(x => (x.Rule, Date: x.Date!.Value))
+            .OrderBy(x => x.Date)
+            .Take(6)
+            .ToList();
+    }
+
+    private async Task OnPeriodChangedAsync(Period period)
+    {
+        _period = period;
+        await LoadAsync();
+    }
+
+    private async Task StartNewAsync()
+    {
+        _error = null;
+        _message = null;
+        _payees = await TransactionSvc.RecentPayeesAsync();
+        // A transaction added from the dashboard belongs to the period on screen,
+        // so browsing back a month and adding does not silently book it today.
+        var date = _period.Contains(_today) ? _today : _period.Start;
+        _entry = TransactionEntry.New(EntryKind.Expense, date, _accounts.FirstOrDefault()?.Id);
+    }
+
+    private async Task SaveAsync(Transaction row)
+    {
+        await TransactionSvc.SaveAsync(row);
+        _entry = null;
+        _error = null;
+        _message = "İşlem kaydedildi.";
+        await LoadAsync();
+    }
+
+    private static string BarState(BudgetStatus b) => b.Over ? "over" : b.Near ? "near" : "ok";
+
+    private long _trendMax => _trend.Count == 0 ? 0 : _trend.Max(t => t.Expense);
+
+    /// <summary>Integer percent: a Turkish decimal comma in "height:12,5%" is not valid CSS.</summary>
+    private int TrendHeight(long value) =>
+        _trendMax <= 0 ? 0 : Math.Max(2, (int)(value * 100 / _trendMax));
+}

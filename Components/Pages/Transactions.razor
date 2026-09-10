@@ -1,0 +1,319 @@
+@page "/islemler"
+@rendermode InteractiveServer
+@* Named TransactionSvc, not Transactions: a member cannot share its name with the enclosing component. *@
+@inject SettingsService Settings
+@inject CategoryService CategorySvc
+@inject TransactionService TransactionSvc
+@inject AccountService AccountSvc
+
+<PageTitle>İşlemler</PageTitle>
+
+<div class="spread">
+    <div>
+        <h1>İşlemler</h1>
+        <p class="subtitle">@_period.Label · @_rows.Count kayıt</p>
+    </div>
+    <div class="row">
+        <PeriodNav Value="_period" ValueChanged="OnPeriodChangedAsync" StartDay="_settings.PeriodStartDay" />
+        @if (_entry is null)
+        {
+            <button class="primary" @onclick="StartNewAsync">+ Yeni</button>
+        }
+    </div>
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert ok">@_message</div>
+}
+
+@if (_entry is not null)
+{
+    <div style="margin-bottom:1.25rem">
+        <TransactionForm Model="_entry"
+                         Categories="_categories"
+                         Accounts="_accounts"
+                         Payees="_payees"
+                         Currency="@_settings.Currency"
+                         Error="@_error"
+                         OnSave="SaveAsync"
+                         OnInvalid="e => _error = e"
+                         OnCancel="CancelEdit"
+                         OnDelete="() => _confirmDelete = true" />
+    </div>
+}
+
+@if (_confirmDelete && _entry is not null)
+{
+    <div class="alert err">
+        <div class="spread">
+            <span>Bu işlem kalıcı olarak silinecek.</span>
+            <span class="row">
+                <button class="danger" @onclick="DeleteAsync">Sil</button>
+                <button @onclick="() => _confirmDelete = false">Vazgeç</button>
+            </span>
+        </div>
+    </div>
+}
+
+<div class="card" style="margin-bottom:1rem">
+    <div class="entry-form">
+        <label class="field">
+            <span>Ara</span>
+            <input @bind="_search" @bind:event="oninput" @bind:after="ReloadAsync" placeholder="Yer veya not" />
+        </label>
+
+        <label class="field">
+            <span>Tür</span>
+            <select value="@_kindFilter" @onchange="OnKindFilterChanged">
+                <option value="">Hepsi</option>
+                <option value="0">Gider</option>
+                <option value="1">Gelir</option>
+            </select>
+        </label>
+
+        <label class="field">
+            <span>Kategori</span>
+            <select value="@_categoryFilter" @onchange="OnCategoryFilterChanged">
+                <option value="0">Hepsi</option>
+                @foreach (var c in _categories)
+                {
+                    <option value="@c.Id">@(string.IsNullOrEmpty(c.Icon) ? "" : c.Icon + " ")@c.Name</option>
+                }
+            </select>
+        </label>
+
+        <label class="field">
+            <span>Hesap</span>
+            <select value="@_accountFilter" @onchange="OnAccountFilterChanged">
+                <option value="0">Hepsi</option>
+                @foreach (var a in _accounts)
+                {
+                    <option value="@a.Id">@(string.IsNullOrEmpty(a.Icon) ? "" : a.Icon + " ")@a.Name</option>
+                }
+            </select>
+        </label>
+
+        <div class="actions">
+            <a class="btn" href="@ExportUrl">CSV indir</a>
+        </div>
+    </div>
+</div>
+
+@{
+    // Transfers are listed but never summed, exactly as on the dashboard: money
+    // moved between own accounts is neither spending nor income.
+    var listedExpense = _rows.Where(r => !r.IsTransfer && r.Kind == EntryKind.Expense).Sum(r => r.AmountMinor);
+    var listedIncome = _rows.Where(r => !r.IsTransfer && r.Kind == EntryKind.Income).Sum(r => r.AmountMinor);
+    var transferCount = _rows.Count(r => r.IsTransfer);
+}
+
+<div class="tiles" style="margin-bottom:1rem">
+    <div class="tile expense">
+        <div class="k">Listelenen gider</div>
+        <div class="v">@_settings.Format(listedExpense)</div>
+    </div>
+    <div class="tile income">
+        <div class="k">Listelenen gelir</div>
+        <div class="v">@_settings.Format(listedIncome)</div>
+    </div>
+    @if (transferCount > 0)
+    {
+        <div class="tile net">
+            <div class="k">Transfer</div>
+            <div class="v">@transferCount</div>
+            <div class="sub">toplamlara girmez</div>
+        </div>
+    }
+</div>
+
+@if (_rows.Count == 0)
+{
+    <div class="empty">Bu dönemde ve filtrede işlem yok.</div>
+}
+else
+{
+    <div class="card scroll-x">
+        <table>
+            <thead>
+            <tr>
+                <th>Tarih</th>
+                <th>Kategori</th>
+                <th>Nereye / Not</th>
+                <th>Hesap</th>
+                <th class="right">Tutar</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var t in _rows)
+            {
+                <tr>
+                    <td class="nowrap muted">@t.OccurredOn.ToString("dd.MM.yyyy")</td>
+                    <td>
+                        <span class="pill">
+                            <span class="dot" style="@($"background:{t.Category?.Color ?? "#8b93a3"}")"></span>
+                            @t.Category?.Name
+                        </span>
+                    </td>
+                    <td>
+                        @if (!string.IsNullOrEmpty(t.Payee))
+                        {
+                            <div>@t.Payee</div>
+                        }
+                        @if (!string.IsNullOrEmpty(t.Note))
+                        {
+                            <div class="small muted">@t.Note</div>
+                        }
+                        @if (t.RecurringRuleId is not null)
+                        {
+                            <span class="pill small">🔁 düzenli</span>
+                        }
+                        @if (t.ImportBatchId is not null)
+                        {
+                            <span class="pill small">📥 ekstre</span>
+                        }
+                        @if (t.IsTransfer)
+                        {
+                            <span class="pill small">↔ transfer</span>
+                        }
+                    </td>
+                    <td class="small muted nowrap">
+                        @(t.Account?.Name ?? TransactionService.MethodLabel(t.Method))
+                    </td>
+                    <td class="right">
+                        <span class="amount @(t.Kind == EntryKind.Income ? "income" : "expense")">
+                            @(t.Kind == EntryKind.Income ? "+" : "−")@_settings.Format(t.AmountMinor)
+                        </span>
+                    </td>
+                    <td class="right">
+                        <button class="ghost small" @onclick="() => EditAsync(t)">Düzenle</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private readonly DateOnly _today = DateOnly.FromDateTime(DateTime.Now);
+
+    private UserSettings _settings = new("₺", 1);
+    private Period _period = Period.Containing(DateOnly.FromDateTime(DateTime.Now), 1);
+
+    private List<Transaction> _rows = [];
+    private List<Category> _categories = [];
+    private List<Account> _accounts = [];
+    private List<string> _payees = [];
+
+    private string _search = "";
+    private string _kindFilter = "";
+    private int _categoryFilter;
+    private int _accountFilter;
+
+    private TransactionEntry? _entry;
+    private string? _error;
+    private string? _message;
+    private bool _confirmDelete;
+
+    private string ExportUrl =>
+        $"/export.csv?from={_period.Start:yyyy-MM-dd}&to={_period.End:yyyy-MM-dd}" +
+        $"&category={_categoryFilter}&kind={_kindFilter}&account={_accountFilter}" +
+        $"&search={Uri.EscapeDataString(_search)}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _settings = await Settings.GetAsync();
+        _period = Period.Containing(_today, _settings.PeriodStartDay);
+        _categories = await CategorySvc.ListAsync(includeArchived: true);
+        _accounts = await AccountSvc.ListAsync(includeArchived: true);
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        EntryKind? kind = _kindFilter switch
+        {
+            "0" => EntryKind.Expense,
+            "1" => EntryKind.Income,
+            _ => null
+        };
+
+        _rows = await TransactionSvc.ListAsync(new TransactionFilter(
+            Period: _period,
+            CategoryId: _categoryFilter == 0 ? null : _categoryFilter,
+            Kind: kind,
+            Search: string.IsNullOrWhiteSpace(_search) ? null : _search,
+            AccountId: _accountFilter == 0 ? null : _accountFilter));
+    }
+
+    private async Task OnAccountFilterChanged(ChangeEventArgs e)
+    {
+        _accountFilter = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        await ReloadAsync();
+    }
+
+    private async Task OnPeriodChangedAsync(Period period)
+    {
+        _period = period;
+        await ReloadAsync();
+    }
+
+    private async Task OnKindFilterChanged(ChangeEventArgs e)
+    {
+        _kindFilter = e.Value?.ToString() ?? "";
+        await ReloadAsync();
+    }
+
+    private async Task OnCategoryFilterChanged(ChangeEventArgs e)
+    {
+        _categoryFilter = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        await ReloadAsync();
+    }
+
+    private async Task StartNewAsync()
+    {
+        _error = null;
+        _message = null;
+        _confirmDelete = false;
+        _payees = await TransactionSvc.RecentPayeesAsync();
+        _entry = TransactionEntry.New(
+            EntryKind.Expense,
+            _period.Contains(_today) ? _today : _period.Start,
+            _accountFilter == 0 ? _accounts.FirstOrDefault()?.Id : _accountFilter);
+    }
+
+    private async Task EditAsync(Transaction t)
+    {
+        _error = null;
+        _message = null;
+        _confirmDelete = false;
+        _payees = await TransactionSvc.RecentPayeesAsync();
+        _entry = TransactionEntry.From(t);
+    }
+
+    private void CancelEdit()
+    {
+        _entry = null;
+        _error = null;
+        _confirmDelete = false;
+    }
+
+    private async Task SaveAsync(Transaction row)
+    {
+        await TransactionSvc.SaveAsync(row);
+        _message = row.Id == 0 ? "İşlem eklendi." : "İşlem güncellendi.";
+        CancelEdit();
+        await ReloadAsync();
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_entry is null) return;
+        await TransactionSvc.DeleteAsync(_entry.Id);
+        _message = "İşlem silindi.";
+        CancelEdit();
+        await ReloadAsync();
+    }
+}
